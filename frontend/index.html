@@ -55,7 +55,7 @@
     <header>
       <div>
         <h1>LearnSense Live Dashboard</h1>
-        <p id="session-info">Session: — | Status: Connecting...</p>
+        <p id="session-info">Session: — | Status: Idle (Press Refresh Now)</p>
       </div>
       <div class="controls">
         <label for="key-input" class="status-pill">Access Key:</label>
@@ -118,7 +118,7 @@
           </tr>
         </thead>
         <tbody id="logs-body">
-          <tr><td colspan="7" style="color: var(--muted);">Waiting for metric logs...</td></tr>
+          <tr><td colspan="7" style="color: var(--muted);">Click "Refresh Now" to load metric logs.</td></tr>
         </tbody>
       </table>
     </div>
@@ -142,7 +142,6 @@
     keyInput.value = sessionStorage.getItem("learnsense_key") || "";
     keyInput.addEventListener("change", () => {
       sessionStorage.setItem("learnsense_key", keyInput.value.trim());
-      pollDashboard();
     });
 
     function authHeaders() {
@@ -155,7 +154,7 @@
       startSessionBtn.textContent = "Starting...";
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
 
       try {
         const res = await fetch(`${API_BASE}/api/sessions/start`, {
@@ -234,7 +233,7 @@
 
       const sid = parseInt(sessionInput.value, 10) || 1;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
 
       try {
         const headers = authHeaders();
@@ -353,10 +352,7 @@
 
     startSessionBtn.addEventListener("click", startNewSession);
     refreshBtn.addEventListener("click", pollDashboard);
-    sessionInput.addEventListener("change", pollDashboard);
     camBtn.addEventListener("click", toggleCamera);
-    pollDashboard();
-    setInterval(pollDashboard, 3000);
   </script>
 </body>
 </html>
