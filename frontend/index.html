@@ -29,6 +29,7 @@
     }
     button { background: var(--blue); color: #082f49; font-weight: 600; border: none; cursor: pointer; }
     button.secondary { background: var(--green); color: #052e16; }
+    button.ghost { background: var(--card); color: var(--text); border: 1px solid var(--border); }
     button:hover:not(:disabled) { opacity: 0.92; }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 20px; }
@@ -65,6 +66,7 @@
         <button id="start-session-btn" class="secondary" type="button">Start Session</button>
         <button id="cam-btn" type="button">Start Camera</button>
         <button id="refresh-btn" type="button">Refresh Now</button>
+        <button id="clear-view-btn" class="ghost" type="button">Clear View</button>
         <video id="cam-video" autoplay playsinline muted style="display: none;"></video>
         <canvas id="cam-canvas" width="320" height="240" style="display: none;"></canvas>
       </div>
@@ -130,6 +132,7 @@
     const sessionInput = document.getElementById("session-input");
     const startSessionBtn = document.getElementById("start-session-btn");
     const refreshBtn = document.getElementById("refresh-btn");
+    const clearViewBtn = document.getElementById("clear-view-btn");
     const camBtn = document.getElementById("cam-btn");
     const camVideo = document.getElementById("cam-video");
     const camCanvas = document.getElementById("cam-canvas");
@@ -158,6 +161,13 @@
       document.getElementById("trend-line").setAttribute("points", "");
       document.getElementById("logs-body").innerHTML =
         `<tr><td colspan="7" style="color: var(--muted);">${emptyMessage}</td></tr>`;
+    }
+
+    function clearViewLocal() {
+      const sid = parseInt(sessionInput.value, 10) || 1;
+      clearDisplayedMetrics('View cleared. Click "Refresh Now" to fetch logs again.');
+      document.getElementById("session-info").textContent =
+        `Session #${sid} | Status: View Cleared (Local Only)`;
     }
 
     async function startNewSession() {
@@ -369,6 +379,7 @@
 
     startSessionBtn.addEventListener("click", startNewSession);
     refreshBtn.addEventListener("click", pollDashboard);
+    clearViewBtn.addEventListener("click", clearViewLocal);
     camBtn.addEventListener("click", toggleCamera);
   </script>
 </body>
