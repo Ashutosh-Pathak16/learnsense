@@ -28,6 +28,7 @@
       padding: 8px 12px; border-radius: 8px; font-size: 0.9rem;
     }
     button { background: var(--blue); color: #082f49; font-weight: 600; border: none; cursor: pointer; }
+    button.secondary { background: var(--green); color: #052e16; }
     button:hover:not(:disabled) { opacity: 0.92; }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 20px; }
@@ -61,6 +62,7 @@
         <input id="key-input" type="password" placeholder="Enter key" style="width: 130px;" />
         <label for="session-input" class="status-pill">Session ID:</label>
         <input id="session-input" type="number" min="1" value="1" style="width: 80px;" />
+        <button id="start-session-btn" class="secondary" type="button">Start Session</button>
         <button id="cam-btn" type="button">Start Camera</button>
         <button id="refresh-btn" type="button">Refresh Now</button>
         <video id="cam-video" autoplay playsinline muted style="display: none;"></video>
@@ -126,6 +128,7 @@
     const API_BASE = "https://learnsense-api.onrender.com";
     const keyInput = document.getElementById("key-input");
     const sessionInput = document.getElementById("session-input");
+    const startSessionBtn = document.getElementById("start-session-btn");
     const refreshBtn = document.getElementById("refresh-btn");
     const camBtn = document.getElementById("cam-btn");
     const camVideo = document.getElementById("cam-video");
@@ -145,6 +148,43 @@
     function authHeaders() {
       const key = keyInput.value.trim();
       return key ? { "X-Train-Key": key } : {};
+    }
+
+    async function startNewSession() {
+      startSessionBtn.disabled = true;
+      startSessionBtn.textContent = "Starting...";
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      try {
+        const res = await fetch(`${API_BASE}/api/sessions/start`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...authHeaders(),
+          },
+          body: JSON.stringify({ subject_name: "General Lecture" }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const created = await res.json();
+        const newId = created.session_id ?? created.id;
+
+        if (!newId) throw new Error("Missing session_id in response");
+        sessionInput.value = newId;
+        await pollDashboard();
+      } catch (err) {
+        const sid = parseInt(sessionInput.value, 10) || 1;
+        const reason = err.name === "AbortError" ? "Request timed out" : err.message;
+        document.getElementById("session-info").textContent =
+          `Session #${sid} | Start Session Failed (${reason})`;
+      } finally {
+        clearTimeout(timeoutId);
+        startSessionBtn.disabled = false;
+        startSessionBtn.textContent = "Start Session";
+      }
     }
 
     function renderChart(logs) {
@@ -179,4 +219,144 @@
             <td>${row.total_faces}</td>
             <td class="green">${row.attentive_count}</td>
             <td class="amber">${row.distracted_count}</td>
-            <td class="red">${row.sleeping_
+            <td class="red">${row.sleeping_count}</td>
+            <td><strong>${Number(row.avg_attention_score).toFixed(1)}%</strong></td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    async function pollDashboard() {
+      if (pollInFlight) return;
+      pollInFlight = true;
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = "Refreshing...";
+
+      const sid = parseInt(sessionInput.value, 10) || 1;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      try {
+        const headers = authHeaders();
+        const latestRes = await fetch(`${API_BASE}/api/metrics/latest?limit=25`, {
+          headers,
+          signal: controller.signal,
+        });
+        if (!latestRes.ok) throw new Error(`HTTP ${latestRes.status}`);
+        const latestLogs = await latestRes.json();
+
+        const filtered = latestLogs.filter(r => r.session_id === sid);
+        const activeSeries = filtered.length > 0 ? filtered : latestLogs;
+
+        if (activeSeries.length > 0) {
+          const latest = activeSeries[activeSeries.length - 1];
+          document.getElementById("score-val").textContent = `${Number(latest.avg_attention_score).toFixed(1)}%`;
+          document.getElementById("total-val").textContent = latest.total_faces;
+          document.getElementById("att-val").textContent = latest.attentive_count;
+          document.getElementById("dis-val").textContent = latest.distracted_count;
+          document.getElementById("slp-val").textContent = latest.sleeping_count;
+        }
+
+        renderChart(activeSeries);
+        renderTable(activeSeries);
+
+        let sessionLabel = `Session #${sid}`;
+        try {
+          const sumRes = await fetch(`${API_BASE}/api/sessions/${sid}/summary`, {
+            headers,
+            signal: controller.signal,
+          });
+          if (sumRes.ok) {
+            const sum = await sumRes.json();
+            sessionLabel = `Session #${sum.session_id} (${sum.subject_name}) — Avg: ${Number(sum.avg_attention_score).toFixed(1)}%`;
+          }
+        } catch (_) {}
+
+        document.getElementById("session-info").textContent = `${sessionLabel} | Status: Live`;
+      } catch (err) {
+        const reason = err.name === "AbortError" ? "Request timed out" : err.message;
+        document.getElementById("session-info").textContent = `Session #${sid} | Status: Disconnected (${reason})`;
+      } finally {
+        clearTimeout(timeoutId);
+        pollInFlight = false;
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = "Refresh Now";
+      }
+    }
+
+    async function sendCameraFrame() {
+      if (!camStream || sendingFrame) return;
+      if (camVideo.readyState < 2) return;
+
+      sendingFrame = true;
+      try {
+        const ctx = camCanvas.getContext("2d");
+        camCanvas.width = 320;
+        camCanvas.height = 240;
+        ctx.drawImage(camVideo, 0, 0, 320, 240);
+
+        const imageBase64 = camCanvas.toDataURL("image/jpeg", 0.5);
+        const sid = parseInt(sessionInput.value, 10) || 1;
+
+        const res = await fetch(`${API_BASE}/api/metrics/frame`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...authHeaders(),
+          },
+          body: JSON.stringify({
+            session_id: sid,
+            image_base64: imageBase64,
+          }),
+        });
+
+        if (res.ok) {
+          await pollDashboard();
+        } else {
+          document.getElementById("session-info").textContent =
+            `Session #${sid} | Camera Frame Error: HTTP ${res.status}`;
+        }
+      } catch (err) {
+        document.getElementById("session-info").textContent =
+          `Camera Upload Failed (${err.message})`;
+      } finally {
+        sendingFrame = false;
+      }
+    }
+
+    async function toggleCamera() {
+      if (camStream) {
+        clearInterval(camTimer);
+        camTimer = null;
+        camStream.getTracks().forEach((track) => track.stop());
+        camStream = null;
+        camBtn.textContent = "Start Camera";
+        return;
+      }
+
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          alert("Camera access requires HTTPS or a modern browser.");
+          return;
+        }
+        camStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false,
+        });
+        camVideo.srcObject = camStream;
+        camBtn.textContent = "Stop Camera";
+        camTimer = setInterval(sendCameraFrame, 3000);
+      } catch (err) {
+        alert(`Could not access camera: ${err.message}`);
+      }
+    }
+
+    startSessionBtn.addEventListener("click", startNewSession);
+    refreshBtn.addEventListener("click", pollDashboard);
+    sessionInput.addEventListener("change", pollDashboard);
+    camBtn.addEventListener("click", toggleCamera);
+    pollDashboard();
+    setInterval(pollDashboard, 3000);
+  </script>
+</body>
+</html>
