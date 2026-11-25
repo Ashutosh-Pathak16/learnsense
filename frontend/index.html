@@ -22,7 +22,7 @@
     header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 24px; }
     header h1 { font-size: 1.6rem; font-weight: 700; }
     header p { color: var(--muted); font-size: 0.9rem; }
-    .controls { display: flex; align-items: center; gap: 10px; }
+    .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
     input, button {
       background: var(--card); color: var(--text); border: 1px solid var(--border);
       padding: 8px 12px; border-radius: 8px; font-size: 0.9rem;
@@ -49,8 +49,6 @@
   </style>
 </head>
 <body>
-<label for="key-input" class="status-pill">Access Key:</label>
-<input id="key-input" type="password" placeholder="Enter key" style="width: 130px;" />
   <div class="container">
     <header>
       <div>
@@ -58,6 +56,8 @@
         <p id="session-info">Session: — | Status: Connecting...</p>
       </div>
       <div class="controls">
+        <label for="key-input" class="status-pill">Access Key:</label>
+        <input id="key-input" type="password" placeholder="Enter key" style="width: 130px;" />
         <label for="session-input" class="status-pill">Session ID:</label>
         <input id="session-input" type="number" min="1" value="1" style="width: 80px;" />
         <button id="refresh-btn" type="button">Refresh Now</button>
@@ -102,7 +102,7 @@
       <table>
         <thead>
           <tr>
-            <th>Time (UTC)</th>
+            <th>Time</th>
             <th>Session</th>
             <th>Faces</th>
             <th>Attentive</th>
@@ -119,20 +119,21 @@
   </div>
 
   <script>
-const keyInput = document.getElementById("key-input");
-keyInput.value = sessionStorage.getItem("learnsense_key") || "";
-keyInput.addEventListener("change", () => {
-  sessionStorage.setItem("learnsense_key", keyInput.value.trim());
-  pollDashboard();
-});
-
-function authHeaders() {
-  const key = keyInput.value.trim();
-  return key ? { "X-Train-Key": key } : {};
-}
     const API_BASE = "https://learnsense.onrender.com";
+    const keyInput = document.getElementById("key-input");
     const sessionInput = document.getElementById("session-input");
     const refreshBtn = document.getElementById("refresh-btn");
+
+    keyInput.value = sessionStorage.getItem("learnsense_key") || "";
+    keyInput.addEventListener("change", () => {
+      sessionStorage.setItem("learnsense_key", keyInput.value.trim());
+      pollDashboard();
+    });
+
+    function authHeaders() {
+      const key = keyInput.value.trim();
+      return key ? { "X-Train-Key": key } : {};
+    }
 
     function renderChart(logs) {
       const line = document.getElementById("trend-line");
@@ -176,7 +177,9 @@ function authHeaders() {
     async function pollDashboard() {
       const sid = parseInt(sessionInput.value, 10) || 1;
       try {
-        const latestRes = await fetch(`${API_BASE}/api/metrics/latest?limit=25`); if (!latestRes.ok) throw new Error(`HTTP ${latestRes.status}`);
+        const headers = authHeaders();
+        const latestRes = await fetch(`${API_BASE}/api/metrics/latest?limit=25`, { headers });
+        if (!latestRes.ok) throw new Error(`HTTP ${latestRes.status}`);
         const latestLogs = await latestRes.json();
 
         const filtered = latestLogs.filter(r => r.session_id === sid);
@@ -184,14 +187,28 @@ function authHeaders() {
 
         if (activeSeries.length > 0) {
           const latest = activeSeries[activeSeries.length - 1];
-          document.getElementById("score-val").textContent = `${Number(latest.avg_attention_score).toFixed(1)}\%`; document.getElementById("total-val").textContent = latest.total_faces; document.getElementById("att-val").textContent = latest.attentive_count; document.getElementById("dis-val").textContent = latest.distracted_count; document.getElementById("slp-val").textContent = latest.sleeping_count; }  renderChart(activeSeries); renderTable(activeSeries);  let sessionLabel = `Session #${sid}`;
+          document.getElementById("score-val").textContent = `${Number(latest.avg_attention_score).toFixed(1)}%`;
+          document.getElementById("total-val").textContent = latest.total_faces;
+          document.getElementById("att-val").textContent = latest.attentive_count;
+          document.getElementById("dis-val").textContent = latest.distracted_count;
+          document.getElementById("slp-val").textContent = latest.sleeping_count;
+        }
+
+        renderChart(activeSeries);
+        renderTable(activeSeries);
+
+        let sessionLabel = `Session #${sid}`;
         try {
-          const sumRes = await fetch(`${API_BASE}/api/sessions/${sid}/summary`);
+          const sumRes = await fetch(`${API_BASE}/api/sessions/${sid}/summary`, { headers });
           if (sumRes.ok) {
             const sum = await sumRes.json();
-            sessionLabel = `Session #${sum.session_id} (${sum.subject_name}) — Avg: ${Number(sum.avg_attention_score).toFixed(1)}\%`; } } catch (_) {}  document.getElementById("session-info").textContent = `${sessionLabel} | Status: Live`;
+            sessionLabel = `Session #${sum.session_id} (${sum.subject_name}) — Avg: ${Number(sum.avg_attention_score).toFixed(1)}%`;
+          }
+        } catch (_) {}
+
+        document.getElementById("session-info").textContent = `${sessionLabel} | Status: Live`;
       } catch (err) {
-        document.getElementById("session-info").textContent = `Session #${sid} \vert{} Status: Disconnected (${err.message})`;
+        document.getElementById("session-info").textContent = `Session #${sid} | Status: Disconnected (${err.message})`;
       }
     }
 
