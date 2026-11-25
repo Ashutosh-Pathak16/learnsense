@@ -125,7 +125,7 @@
   </div>
 
   <script>
-    const API_BASE = "https://learnsense-api-x3gx.onrender.com";
+    const API_BASE = "https://learnsense-api.onrender.com";
     const keyInput = document.getElementById("key-input");
     const sessionInput = document.getElementById("session-input");
     const startSessionBtn = document.getElementById("start-session-btn");
@@ -147,6 +147,17 @@
     function authHeaders() {
       const key = keyInput.value.trim();
       return key ? { "X-Train-Key": key } : {};
+    }
+
+    function clearDisplayedMetrics(emptyMessage = "No logs recorded yet.") {
+      document.getElementById("score-val").textContent = "0.0%";
+      document.getElementById("total-val").textContent = "0";
+      document.getElementById("att-val").textContent = "0";
+      document.getElementById("dis-val").textContent = "0";
+      document.getElementById("slp-val").textContent = "0";
+      document.getElementById("trend-line").setAttribute("points", "");
+      document.getElementById("logs-body").innerHTML =
+        `<tr><td colspan="7" style="color: var(--muted);">${emptyMessage}</td></tr>`;
     }
 
     async function startNewSession() {
@@ -232,6 +243,9 @@
       refreshBtn.textContent = "Refreshing...";
 
       const sid = parseInt(sessionInput.value, 10) || 1;
+      clearDisplayedMetrics("Refreshing metric logs...");
+      document.getElementById("session-info").textContent = `Session #${sid} | Status: Refreshing...`;
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000);
 
@@ -254,6 +268,8 @@
           document.getElementById("att-val").textContent = latest.attentive_count;
           document.getElementById("dis-val").textContent = latest.distracted_count;
           document.getElementById("slp-val").textContent = latest.sleeping_count;
+        } else {
+          clearDisplayedMetrics("No logs recorded yet.");
         }
 
         renderChart(activeSeries);
@@ -273,6 +289,7 @@
 
         document.getElementById("session-info").textContent = `${sessionLabel} | Status: Live`;
       } catch (err) {
+        clearDisplayedMetrics("Old logs cleared. Unable to load new metric logs.");
         const reason = err.name === "AbortError" ? "Request timed out" : err.message;
         document.getElementById("session-info").textContent = `Session #${sid} | Status: Disconnected (${reason})`;
       } finally {
