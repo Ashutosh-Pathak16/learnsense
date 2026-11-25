@@ -60,7 +60,10 @@
         <input id="key-input" type="password" placeholder="Enter key" style="width: 130px;" />
         <label for="session-input" class="status-pill">Session ID:</label>
         <input id="session-input" type="number" min="1" value="1" style="width: 80px;" />
+        <button id="cam-btn" type="button">Start Camera</button>
         <button id="refresh-btn" type="button">Refresh Now</button>
+        <video id="cam-video" autoplay playsinline muted style="display: none;"></video>
+        <canvas id="cam-canvas" width="640" height="480" style="display: none;"></canvas>
       </div>
     </header>
 
@@ -119,10 +122,17 @@
   </div>
 
   <script>
-    const API_BASE = "https://learnsense-api-x3gx.onrender.com";
+    const API_BASE = "https://learnsense-api.onrender.com";
     const keyInput = document.getElementById("key-input");
     const sessionInput = document.getElementById("session-input");
     const refreshBtn = document.getElementById("refresh-btn");
+    const camBtn = document.getElementById("cam-btn");
+    const camVideo = document.getElementById("cam-video");
+    const camCanvas = document.getElementById("cam-canvas");
+
+    let camStream = null;
+    let camTimer = null;
+    let sendingFrame = false;
 
     keyInput.value = sessionStorage.getItem("learnsense_key") || "";
     keyInput.addEventListener("change", () => {
@@ -212,8 +222,76 @@
       }
     }
 
+    async function sendCameraFrame() {
+      if (!camStream || sendingFrame) return;
+      if (camVideo.readyState < 2) return;
+
+      sendingFrame = true;
+      try {
+        const ctx = camCanvas.getContext("2d");
+        camCanvas.width = camVideo.videoWidth || 640;
+        camCanvas.height = camVideo.videoHeight || 480;
+        ctx.drawImage(camVideo, 0, 0, camCanvas.width, camCanvas.height);
+
+        const imageBase64 = camCanvas.toDataURL("image/jpeg", 0.7);
+        const sid = parseInt(sessionInput.value, 10) || 1;
+
+        const res = await fetch(`${API_BASE}/api/metrics/frame`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...authHeaders(),
+          },
+          body: JSON.stringify({
+            session_id: sid,
+            image_base64: imageBase64,
+          }),
+        });
+
+        if (res.ok) {
+          await pollDashboard();
+        } else {
+          document.getElementById("session-info").textContent =
+            `Session #${sid} | Camera Frame Error: HTTP ${res.status}`;
+        }
+      } catch (err) {
+        document.getElementById("session-info").textContent =
+          `Camera Upload Failed (${err.message})`;
+      } finally {
+        sendingFrame = false;
+      }
+    }
+
+    async function toggleCamera() {
+      if (camStream) {
+        clearInterval(camTimer);
+        camTimer = null;
+        camStream.getTracks().forEach((track) => track.stop());
+        camStream = null;
+        camBtn.textContent = "Start Camera";
+        return;
+      }
+
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          alert("Camera access requires HTTPS or a modern browser.");
+          return;
+        }
+        camStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false,
+        });
+        camVideo.srcObject = camStream;
+        camBtn.textContent = "Stop Camera";
+        camTimer = setInterval(sendCameraFrame, 1500);
+      } catch (err) {
+        alert(`Could not access camera: ${err.message}`);
+      }
+    }
+
     refreshBtn.addEventListener("click", pollDashboard);
     sessionInput.addEventListener("change", pollDashboard);
+    camBtn.addEventListener("click", toggleCamera);
     pollDashboard();
     setInterval(pollDashboard, 1500);
   </script>

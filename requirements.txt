@@ -3,3 +3,8 @@ uvicorn
 sqlalchemy
 pydantic
 psycopg2-binary
+opencv-python-headless
+mediapipe
+scikit-learn
+joblib
+numpy
