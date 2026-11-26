@@ -19,7 +19,7 @@
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
     body { background: var(--bg); color: var(--text); padding: 24px; }
     .container { max-width: 1120px; margin: 0 auto; }
-    header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 24px; }
+    header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
     header h1 { font-size: 1.6rem; font-weight: 700; }
     header p { color: var(--muted); font-size: 0.9rem; }
     .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
@@ -32,6 +32,18 @@
     button.ghost { background: var(--card); color: var(--text); border: 1px solid var(--border); }
     button:hover:not(:disabled) { opacity: 0.92; }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .session-bar {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+      background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 10px 14px; margin-bottom: 20px; font-size: 0.85rem;
+    }
+    .session-chip {
+      background: #0b1220; color: var(--text); border: 1px solid var(--border);
+      padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; cursor: pointer;
+    }
+    .session-chip.active {
+      border-color: var(--blue); color: var(--blue); font-weight: 600;
+    }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 20px; }
     .card {
       background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px;
@@ -69,7 +81,9 @@
       </div>
       <div class="controls">
         <label for="key-input" class="status-pill">Access Key:</label>
-        <input id="key-input" type="password" placeholder="Enter key" style="width: 130px;" />
+        <input id="key-input" type="text" placeholder="Auto key" style="width: 185px;" />
+        <button id="copy-key-btn" class="ghost" type="button" title="Copy access key">Copy Key</button>
+        <button id="new-key-btn" class="ghost" type="button" title="Generate a fresh unique key">New Key</button>
         <label for="session-input" class="status-pill">Session ID:</label>
         <input id="session-input" type="number" min="1" value="1" style="width: 80px;" />
         <button id="start-session-btn" class="secondary" type="button">Start Session</button>
@@ -82,6 +96,13 @@
         <canvas id="cam-canvas" width="320" height="240" style="display: none;"></canvas>
       </div>
     </header>
+
+    <div class="session-bar">
+      <span class="status-pill">Sessions for current key:</span>
+      <div id="key-sessions-list" style="display: flex; flex-wrap: wrap; gap: 6px;">
+        <span class="status-pill">None shown yet (press Refresh Now or Start Session)</span>
+      </div>
+    </div>
 
     <div class="panel">
       <h2>Live Camera Feed</h2>
@@ -148,7 +169,10 @@
   <script>
     const API_BASE = "https://learnsense-api-x3gx.onrender.com";
     const keyInput = document.getElementById("key-input");
+    const copyKeyBtn = document.getElementById("copy-key-btn");
+    const newKeyBtn = document.getElementById("new-key-btn");
     const sessionInput = document.getElementById("session-input");
+    const keySessionsList = document.getElementById("key-sessions-list");
     const startSessionBtn = document.getElementById("start-session-btn");
     const camDeviceSelect = document.getElementById("cam-device-select");
     const refreshBtn = document.getElementById("refresh-btn");
@@ -162,10 +186,81 @@
     let camTimer = null;
     let sendingFrame = false;
     let pollInFlight = false;
+    let knownSessionIds = [];
 
-    keyInput.value = sessionStorage.getItem("learnsense_key") || "";
+    function generateBrowserKey() {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return `ls_${window.crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+      }
+      return `ls_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+    }
+
+    function renderKeySessionChips(ids = knownSessionIds) {
+      const currentSid = parseInt(sessionInput.value, 10) || 1;
+      const merged = Array.from(new Set([...ids, ...(knownSessionIds || [])])).sort((a, b) => a - b);
+      knownSessionIds = merged;
+
+      if (!merged.length) {
+        keySessionsList.innerHTML = `<span class="status-pill">No sessions recorded yet for this key</span>`;
+        return;
+      }
+
+      keySessionsList.innerHTML = merged.map((id) => {
+        const activeClass = id === currentSid ? "session-chip active" : "session-chip";
+        return `<button type="button" class="${activeClass}" data-sid="${id}">Session #${id}</button>`;
+      }).join("");
+
+      keySessionsList.querySelectorAll(".session-chip").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          sessionInput.value = btn.getAttribute("data-sid");
+          renderKeySessionChips();
+          pollDashboard();
+        });
+      });
+    }
+
+    function initBrowserKey() {
+      let saved = (sessionStorage.getItem("learnsense_key") || "").trim();
+      if (!saved) {
+        saved = generateBrowserKey();
+        sessionStorage.setItem("learnsense_key", saved);
+      }
+      keyInput.value = saved;
+    }
+
+    initBrowserKey();
+
+    copyKeyBtn.addEventListener("click", async () => {
+      const val = keyInput.value.trim();
+      if (!val) return;
+      try {
+        await navigator.clipboard.writeText(val);
+        const prev = copyKeyBtn.textContent;
+        copyKeyBtn.textContent = "Copied!";
+        setTimeout(() => { copyKeyBtn.textContent = prev; }, 1400);
+      } catch (_) {
+        keyInput.select();
+      }
+    });
+
     keyInput.addEventListener("change", () => {
-      sessionStorage.setItem("learnsense_key", keyInput.value.trim());
+      const cleaned = keyInput.value.trim() || generateBrowserKey();
+      keyInput.value = cleaned;
+      sessionStorage.setItem("learnsense_key", cleaned);
+      knownSessionIds = [];
+      keySessionsList.innerHTML = `<span class="status-pill">Press Refresh Now to load sessions for this key</span>`;
+      clearDisplayedMetrics('Access key updated. Click "Refresh Now" to load logs for this key.');
+    });
+
+    newKeyBtn.addEventListener("click", () => {
+      const fresh = generateBrowserKey();
+      keyInput.value = fresh;
+      sessionStorage.setItem("learnsense_key", fresh);
+      knownSessionIds = [];
+      keySessionsList.innerHTML = `<span class="status-pill">New key active — click Start Session to create Session #1+</span>`;
+      clearDisplayedMetrics('New unique key generated. Click "Start Session" to begin.');
+      document.getElementById("session-info").textContent =
+        "Session: — | Status: New Unique Key Generated";
     });
 
     function authHeaders() {
@@ -232,6 +327,8 @@
 
         if (!newId) throw new Error("Missing session_id in response");
         sessionInput.value = newId;
+        knownSessionIds = Array.from(new Set([...knownSessionIds, Number(newId)]));
+        renderKeySessionChips();
         await pollDashboard();
       } catch (err) {
         const sid = parseInt(sessionInput.value, 10) || 1;
@@ -299,12 +396,18 @@
 
       try {
         const headers = authHeaders();
-        const latestRes = await fetch(`${API_BASE}/api/metrics/latest?limit=25`, {
+        const latestRes = await fetch(`${API_BASE}/api/metrics/latest?limit=50`, {
           headers,
           signal: controller.signal,
         });
         if (!latestRes.ok) throw new Error(`HTTP ${latestRes.status}`);
         const latestLogs = await latestRes.json();
+
+        const discoveredIds = Array.from(
+          new Set(latestLogs.map((r) => Number(r.session_id)).filter((n) => !Number.isNaN(n)))
+        );
+        knownSessionIds = Array.from(new Set([...knownSessionIds, ...discoveredIds]));
+        renderKeySessionChips();
 
         const filtered = latestLogs.filter(r => r.session_id === sid);
         const activeSeries = filtered.length > 0 ? filtered : latestLogs;
@@ -317,7 +420,7 @@
           document.getElementById("dis-val").textContent = latest.distracted_count;
           document.getElementById("slp-val").textContent = latest.sleeping_count;
         } else {
-          clearDisplayedMetrics("No logs recorded yet.");
+          clearDisplayedMetrics("No logs recorded yet for this key.");
         }
 
         renderChart(activeSeries);
