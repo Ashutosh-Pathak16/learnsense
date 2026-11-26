@@ -23,7 +23,7 @@
     header h1 { font-size: 1.6rem; font-weight: 700; }
     header p { color: var(--muted); font-size: 0.9rem; }
     .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-    input, button {
+    input, select, button {
       background: var(--card); color: var(--text); border: 1px solid var(--border);
       padding: 8px 12px; border-radius: 8px; font-size: 0.9rem;
     }
@@ -73,6 +73,9 @@
         <label for="session-input" class="status-pill">Session ID:</label>
         <input id="session-input" type="number" min="1" value="1" style="width: 80px;" />
         <button id="start-session-btn" class="secondary" type="button">Start Session</button>
+        <select id="cam-device-select" title="Select camera or capture device">
+          <option value="">Default Camera</option>
+        </select>
         <button id="cam-btn" type="button">Start Camera</button>
         <button id="refresh-btn" type="button">Refresh Now</button>
         <button id="clear-view-btn" class="ghost" type="button">Clear View</button>
@@ -147,6 +150,7 @@
     const keyInput = document.getElementById("key-input");
     const sessionInput = document.getElementById("session-input");
     const startSessionBtn = document.getElementById("start-session-btn");
+    const camDeviceSelect = document.getElementById("cam-device-select");
     const refreshBtn = document.getElementById("refresh-btn");
     const clearViewBtn = document.getElementById("clear-view-btn");
     const camBtn = document.getElementById("cam-btn");
@@ -167,6 +171,23 @@
     function authHeaders() {
       const key = keyInput.value.trim();
       return key ? { "X-Train-Key": key } : {};
+    }
+
+    async function populateCameraDevices() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter((d) => d.kind === "videoinput");
+        const currentVal = camDeviceSelect.value;
+        camDeviceSelect.innerHTML = `<option value="">Default Camera</option>`;
+        videoInputs.forEach((dev, idx) => {
+          const opt = document.createElement("option");
+          opt.value = dev.deviceId;
+          opt.textContent = dev.label || `Camera / Capture Device ${idx + 1}`;
+          camDeviceSelect.appendChild(opt);
+        });
+        if (currentVal) camDeviceSelect.value = currentVal;
+      } catch (_) {}
     }
 
     function clearDisplayedMetrics(emptyMessage = "No logs recorded yet.") {
@@ -391,10 +412,17 @@
           alert("Camera access requires HTTPS or a modern browser.");
           return;
         }
+        const chosenId = camDeviceSelect.value;
+        const videoConstraint = chosenId
+          ? { deviceId: { exact: chosenId } }
+          : { facingMode: "user" };
+
         camStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
+          video: videoConstraint,
           audio: false,
         });
+        await populateCameraDevices();
+
         camPreview.srcObject = camStream;
         camPreview.style.display = "block";
         camPlaceholder.style.display = "none";
@@ -410,6 +438,7 @@
     refreshBtn.addEventListener("click", pollDashboard);
     clearViewBtn.addEventListener("click", clearViewLocal);
     camBtn.addEventListener("click", toggleCamera);
+    populateCameraDevices();
   </script>
 </body>
 </html>
