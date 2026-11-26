@@ -2,13 +2,15 @@ import base64
 from datetime import datetime, timezone
 import hashlib
 import os
+import threading
 import time
 from typing import List, Optional
 
+import anyio
 import cv2
-import numpy as np
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+import numpy as np
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     Boolean,
@@ -36,8 +38,16 @@ DATABASE_URL = os.environ.get("DATABASE_URL", DEFAULT_SQLITE_URL).strip() or DEF
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_size=10,
+        max_overflow=10,
+    )
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -144,7 +154,7 @@ class SessionSummaryResponse(BaseModel):
 
 # --- FastAPI App ---
 
-app = FastAPI(title="LearnSense API", version="1.2.0")
+app = FastAPI(title="LearnSense API", version="1.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -177,6 +187,9 @@ def get_db():
         db.close()
 
 
+_init_lock = threading.Lock()
+_max_concurrent_frames = max(1, int(os.environ.get("MAX_CONCURRENT_FRAMES", "2")))
+_frame_semaphore = threading.BoundedSemaphore(value=_max_concurrent_frames)
 _vision_pipeline: Optional[VisionPipeline] = None
 _attention_predictor: Optional[AttentionPredictor] = None
 
@@ -184,14 +197,18 @@ _attention_predictor: Optional[AttentionPredictor] = None
 def get_vision_pipeline() -> VisionPipeline:
     global _vision_pipeline
     if _vision_pipeline is None:
-        _vision_pipeline = VisionPipeline(max_num_faces=5)
+        with _init_lock:
+            if _vision_pipeline is None:
+                _vision_pipeline = VisionPipeline(max_num_faces=5)
     return _vision_pipeline
 
 
 def get_attention_predictor() -> AttentionPredictor:
     global _attention_predictor
     if _attention_predictor is None:
-        _attention_predictor = AttentionPredictor("attention_model.joblib")
+        with _init_lock:
+            if _attention_predictor is None:
+                _attention_predictor = AttentionPredictor("attention_model.joblib")
     return _attention_predictor
 
 
@@ -203,6 +220,29 @@ def _decode_base64_image(image_base64: str) -> np.ndarray:
     if frame is None:
         raise HTTPException(status_code=400, detail="Invalid or corrupted image frame")
     return frame
+
+
+def _run_frame_inference_sync(image_base64: str) -> dict:
+    acquired = _frame_semaphore.acquire(timeout=8.0)
+    if not acquired:
+        raise HTTPException(
+            status_code=429,
+            detail="Server is busy processing other camera frames; retry shortly.",
+        )
+    try:
+        frame = _decode_base64_image(image_base64)
+        pipeline = get_vision_pipeline()
+        predictor = get_attention_predictor()
+
+        _, faces = pipeline.extract_features(frame, timestamp=time.time())
+        for face in faces:
+            code, label = predictor.predict(face)
+            face["state_code"] = code
+            face["state_label"] = label
+
+        return pipeline.summarize_frame(faces)
+    finally:
+        _frame_semaphore.release()
 
 
 def _get_owned_session(db: Session, session_id: int, key_hash: str) -> StudySession:
@@ -314,23 +354,14 @@ def log_metrics(
 
 
 @app.post("/api/metrics/frame", response_model=MetricLogResponse)
-def log_metrics_from_frame(
+async def log_metrics_from_frame(
     payload: FramePayload = Body(...),
     key_hash: str = Depends(require_workspace_key),
     db: Session = Depends(get_db),
 ):
     _get_owned_session(db, payload.session_id, key_hash)
-    frame = _decode_base64_image(payload.image_base64)
-    pipeline = get_vision_pipeline()
-    predictor = get_attention_predictor()
+    summary = await anyio.to_thread.run_sync(_run_frame_inference_sync, payload.image_base64)
 
-    _, faces = pipeline.extract_features(frame, timestamp=time.time())
-    for face in faces:
-        code, label = predictor.predict(face)
-        face["state_code"] = code
-        face["state_label"] = label
-
-    summary = pipeline.summarize_frame(faces)
     metric_row = MetricLog(
         session_id=payload.session_id,
         total_faces=summary["total_faces"],

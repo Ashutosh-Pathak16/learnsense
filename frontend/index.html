@@ -555,6 +555,9 @@
 
         if (res.ok) {
           await pollDashboard();
+        } else if (res.status === 429) {
+          document.getElementById("session-info").textContent =
+            `Session #${sid} | Server busy with concurrent frames, waiting for next slot...`;
         } else {
           document.getElementById("session-info").textContent =
             `Session #${sid} | Camera Frame Error: HTTP ${res.status}`;
@@ -606,7 +609,7 @@
         camPreview.style.display = "block";
         camPlaceholder.style.display = "none";
         camBtn.textContent = "Stop Camera";
-        camTimer = setInterval(sendCameraFrame, 3000);
+        camTimer = setInterval(sendCameraFrame, 4500);
       } catch (err) {
         stopCameraPreview();
         alert(`Could not access camera: ${err.message}`);
