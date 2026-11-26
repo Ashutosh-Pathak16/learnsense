@@ -144,7 +144,7 @@ class SessionSummaryResponse(BaseModel):
 
 # --- FastAPI App ---
 
-app = FastAPI(title="LearnSense API", version="1.1.0")
+app = FastAPI(title="LearnSense API", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -219,6 +219,32 @@ def _get_owned_session(db: Session, session_id: int, key_hash: str) -> StudySess
 @app.get("/health")
 def health_check():
     return {"status": "ok", "service": "LearnSense API"}
+
+
+@app.get("/api/sessions", response_model=List[SessionResponse])
+def list_sessions(
+    limit: int = Query(default=30, ge=1, le=100),
+    key_hash: str = Depends(require_workspace_key),
+    db: Session = Depends(get_db),
+):
+    sessions = (
+        db.query(StudySession)
+        .filter(StudySession.key_hash == key_hash)
+        .order_by(StudySession.id.desc())
+        .limit(limit)
+        .all()
+    )
+    sessions.reverse()
+    return [
+        SessionResponse(
+            session_id=s.id,
+            subject_name=s.subject_name,
+            started_at=s.started_at,
+            ended_at=s.ended_at,
+            is_active=s.is_active,
+        )
+        for s in sessions
+    ]
 
 
 @app.post("/api/sessions/start", response_model=SessionResponse)
